@@ -21,7 +21,6 @@ from shapely.geometry import ( # type: ignore[import]
         Polygon, MultiPolygon,
         box, GeometryCollection, Point, MultiPoint,
         LineString, LinearRing)
-from shapely import intersection
 from shapely.ops import polygonize, linemerge, unary_union
 import geopandas as gpd
 import utm
@@ -150,88 +149,82 @@ def geom_to_multipolygon(mesh):
     return MultiPolygon(polygon_collection)
 
 
-def get_boundary_segments(mesh):
-
+def get_boundary_vertices(mesh):
     coords = mesh.vert2['coord']
     boundary_edges = get_boundary_edges(mesh)
     boundary_verts = np.unique(boundary_edges)
     boundary_coords = coords[boundary_verts]
 
     vert_map = {
-            orig: new for new, orig in enumerate(boundary_verts)}
+        orig: new for new, orig in enumerate(boundary_verts)}
     new_boundary_edges = np.array(
         [vert_map[v] for v in boundary_edges.ravel()]).reshape(
-                boundary_edges.shape)
+        boundary_edges.shape)
 
     graph = sparse.lil_matrix(
-            (len(boundary_verts), len(boundary_verts)))
+        (len(boundary_verts), len(boundary_verts)))
     for vert1, vert2 in new_boundary_edges:
         graph[vert1, vert2] = 1
 
     n_components, labels = sparse.csgraph.connected_components(
-            graph, directed=False)
+        graph, directed=False)
 
-    segments = []
+    vertices = []
     for i in range(n_components):
         conn_mask = np.any(np.isin(
-                new_boundary_edges, np.nonzero(labels == i)),
-                axis=1)
+            new_boundary_edges, np.nonzero(labels == i)),
+            axis=1)
         conn_edges = new_boundary_edges[conn_mask]
-        this_segment = linemerge(boundary_coords[conn_edges].tolist())
-        if not this_segment.is_simple:
+        line = linemerge(boundary_coords[conn_edges].tolist())
+        bverts = boundary_verts[conn_edges].tolist()
+
+        if not line.is_simple:
             # Pinched nodes also result in non-simple linestring,
             # but they can be handled gracefully, here we are looking
             # for other issues like folded elements
-            test_polys = list(polygonize(this_segment))
-            if not test_polys:
-                coords = list(this_segment.coords)
-                for n in range(len(coords)):
-                    n2 = n + 1
-                    if n2 == len(coords):
-                        n2 = 0
-                    pnt1 = coords[n]
-                    pnt2 = coords[n2]
-                    dx = pnt2[0] - pnt1[0]
-                    if dx > 350.:
-                        coords[n2] = (pnt2[0] - 360., pnt2[1])
-                    elif dx < -350.:
-                        coords[n2] = (pnt2[0] + 360., pnt2[1])
-                this_segment = LineString(coords)
-                test_polys = list(polygonize(this_segment))
-                if test_polys:
-                    # This is a global outline crossing a meridian
-                    y0 = -90
-                    y1 = 90
-                    if boundary_coords.min() < 0:
-                        x0 = -180
-                        x1 = 180
-                        shift = 360.
-                    else:
-                        x0 = 0
-                        x1 = 360
-                        shift = -360.
-                    coords2 = [(p[0] + shift, p[1]) for p in coords]
-                    clip_to = Polygon(((x0, y0), (x0, y1), (x1, y1), (x1, y0), (x0, y0)))
-                    for n in range(2):
-                        if n == 0:
-                            polys = list(polygonize(LineString(coords)))
-                        else:
-                            polys = list(polygonize(LineString(coords2)))
-                        intersected_polys = intersection(polys, clip_to)
-                        for mpoly in intersected_polys:
-                            if isinstance(mpoly, MultiPolygon):
-                                for gpoly in mpoly.geoms:
-                                    segments.append(LineString(gpoly.exterior.coords))
-                            else:
-                                segments.append(LineString(mpoly.exterior.coords))
-                    this_segment = None
+            poly = list(polygonize(line))
+            if not poly:
+                poly = unwrap_line_to_valid_polygon(line)
 
-            if not test_polys:
+            if not poly:
                 raise ValueError(
                     "Mesh boundary crosses itself! Folded element(s)!")
-        if this_segment:
-            segments.append(this_segment)
+        vertices.append(bverts)
 
+    return vertices
+
+
+def unwrap_line_to_valid_polygon(line, side=None):
+    if side is None:
+        side = 'left'
+    coords = list(line.coords)
+    for n in range(len(coords)):
+        n2 = n + 1
+        if n2 == len(coords):
+            n2 = 0
+        pnt1 = coords[n]
+        pnt2 = coords[n2]
+        dx = pnt2[0] - pnt1[0]
+        if dx > 350.:
+            if side == 'left':
+                coords[n2] = (pnt2[0] - 360., pnt2[1])
+            else:
+                coords[n] = (pnt1[0] + 360., pnt1[1])
+        elif dx < -350.:
+            if side == 'left':
+                coords[n] = (pnt1[0] - 360., pnt1[1])
+            else:
+                coords[n2] = (pnt2[0] + 360., pnt2[1])
+    return list(polygonize(LineString(coords)))
+
+
+def get_boundary_segments(mesh):
+    coords = mesh.vert2['coord']
+    boundary_vertices = get_boundary_vertices(mesh)
+    segments = []
+    for segment_vertices in boundary_vertices:
+        segment = linemerge(coords[segment_vertices, :].tolist())
+        segments.append(segment)
     return segments
 
 

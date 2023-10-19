@@ -3,11 +3,9 @@ import os
 import tempfile
 import unittest
 import warnings
-from pathlib import Path
 
 import numpy as np
-from jigsawpy import jigsaw_msh_t
-from shapely import geometry
+import shapely
 
 from ocsmesh import utils
 from ocsmesh.mesh.mesh import Mesh
@@ -15,7 +13,7 @@ from ocsmesh.mesh.mesh import Mesh
 
 
 def edge_at (x, y):
-    return geometry.Point(x, y).buffer(0.05)
+    return shapely.geometry.Point(x, y).buffer(0.05)
 
 class BoundaryExtraction(unittest.TestCase):
 
@@ -106,8 +104,8 @@ class BoundaryExtraction(unittest.TestCase):
 
     def test_manual_boundary_specification_correctness(self):
         # Shape for wrapping bottom boundary
-        shape1 = geometry.box(0.5, -0.5, 3.5, 0.5)
-        shape2 = geometry.box(1.5, -0.5, 2.5, 0.5)
+        shape1 = shapely.geometry.box(0.5, -0.5, 3.5, 0.5)
+        shape2 = shapely.geometry.box(1.5, -0.5, 2.5, 0.5)
 
         self.mesh.boundaries.auto_generate()
         # bdry is referring to mesh object and can be mutated
@@ -136,7 +134,7 @@ class BoundaryExtraction(unittest.TestCase):
         # bdry is referring to mesh object and can be mutated
         bdry = self.mesh.boundaries
 
-        bdry.set_open(region=geometry.box(0.5, 1.5, 2.5, 3.5))
+        bdry.set_open(region=shapely.geometry.box(0.5, 1.5, 2.5, 3.5))
 
         self.assertEqual(len(bdry.open()), 0)
         self.assertEqual(len(bdry.land()), 1)
@@ -148,7 +146,7 @@ class BoundaryExtraction(unittest.TestCase):
         # bdry is referring to mesh object and can be mutated
         bdry = self.mesh.boundaries
 
-        bdry.set_open(region=geometry.Polygon([
+        bdry.set_open(region=shapely.geometry.Polygon([
             (-1, 4.5),
             (0.5, 4.5),
             (0.5, 3.5),
@@ -308,13 +306,21 @@ class BoundaryExtraction(unittest.TestCase):
 
 class TestGlobalBoundarySetter(unittest.TestCase):
     mesh_file = os.path.join(os.path.dirname(__file__), '../data/f14/global_50859e27330n1.14')
+    mesh = Mesh.open(mesh_file)
+
+    def test_get_boundary_vertices(self):
+        segments = utils.get_boundary_vertices(self.mesh.msh_t)
+        assert len(segments)  == 65
 
     def test_get_boundary_segments(self):
-        mesh = Mesh.open(self.mesh_file)
-        segments = utils.get_boundary_segments(mesh.msh_t)
-        assert len(segments)  == 67
+        segments = utils.get_boundary_segments(self.mesh.msh_t)
+        assert len(segments) == 65
 
-    def test_get_mesh_polygons(self):
-        mesh = Mesh.open(self.mesh_file)
-        mesh_polygons = utils.get_mesh_polygons(mesh.msh_t)
 
+    def test_unwrap_line_to_valid_polygon(self):
+        segments = utils.get_boundary_segments(self.mesh.msh_t)
+
+        # In this example global mesh, the first segment is wrapped around 180W/180E.
+        for side in [None, 'left', 'right']:
+            poly = utils.unwrap_line_to_valid_polygon(segments[0], side=side)
+            assert poly
