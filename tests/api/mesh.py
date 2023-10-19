@@ -1,4 +1,5 @@
 #! python
+import os
 import tempfile
 import unittest
 import warnings
@@ -303,3 +304,17 @@ class BoundaryExtraction(unittest.TestCase):
         self.assertEqual(len(bdry.interior()), 0)
 
         self.assertEqual(bdry.open().iloc[0]['index_id'], [1, 2, 3])
+
+
+class TestGlobalBoundarySetter(unittest.TestCase):
+    mesh_file = os.path.join(os.path.dirname(__file__), '../data/f14/global_50859e27330n1.14')
+
+    def test_get_boundary_segments(self):
+        mesh = Mesh.open(self.mesh_file)
+        segments = utils.get_boundary_segments(mesh.msh_t)
+        assert len(segments)  == 67
+
+    def test_get_mesh_polygons(self):
+        mesh = Mesh.open(self.mesh_file)
+        mesh_polygons = utils.get_mesh_polygons(mesh.msh_t)
+

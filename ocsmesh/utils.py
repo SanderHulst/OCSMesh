@@ -21,6 +21,7 @@ from shapely.geometry import ( # type: ignore[import]
         Polygon, MultiPolygon,
         box, GeometryCollection, Point, MultiPoint,
         LineString, LinearRing)
+from shapely import intersection
 from shapely.ops import polygonize, linemerge, unary_union
 import geopandas as gpd
 import utm
@@ -183,9 +184,53 @@ def get_boundary_segments(mesh):
             # for other issues like folded elements
             test_polys = list(polygonize(this_segment))
             if not test_polys:
+                coords = list(this_segment.coords)
+                for n in range(len(coords)):
+                    n2 = n + 1
+                    if n2 == len(coords):
+                        n2 = 0
+                    pnt1 = coords[n]
+                    pnt2 = coords[n2]
+                    dx = pnt2[0] - pnt1[0]
+                    if dx > 350.:
+                        coords[n2] = (pnt2[0] - 360., pnt2[1])
+                    elif dx < -350.:
+                        coords[n2] = (pnt2[0] + 360., pnt2[1])
+                this_segment = LineString(coords)
+                test_polys = list(polygonize(this_segment))
+                if test_polys:
+                    # This is a global outline crossing a meridian
+                    y0 = -90
+                    y1 = 90
+                    if boundary_coords.min() < 0:
+                        x0 = -180
+                        x1 = 180
+                        shift = 360.
+                    else:
+                        x0 = 0
+                        x1 = 360
+                        shift = -360.
+                    coords2 = [(p[0] + shift, p[1]) for p in coords]
+                    clip_to = Polygon(((x0, y0), (x0, y1), (x1, y1), (x1, y0), (x0, y0)))
+                    for n in range(2):
+                        if n == 0:
+                            polys = list(polygonize(LineString(coords)))
+                        else:
+                            polys = list(polygonize(LineString(coords2)))
+                        intersected_polys = intersection(polys, clip_to)
+                        for mpoly in intersected_polys:
+                            if isinstance(mpoly, MultiPolygon):
+                                for gpoly in mpoly.geoms:
+                                    segments.append(LineString(gpoly.exterior.coords))
+                            else:
+                                segments.append(LineString(mpoly.exterior.coords))
+                    this_segment = None
+
+            if not test_polys:
                 raise ValueError(
                     "Mesh boundary crosses itself! Folded element(s)!")
-        segments.append(this_segment)
+        if this_segment:
+            segments.append(this_segment)
 
     return segments
 
