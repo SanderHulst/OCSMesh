@@ -208,46 +208,48 @@ def get_boundary_segments(mesh, boundary_vertices=None):
 def get_boundary_data(mesh):
     """Assume that the largest polygon is land. Any poly enclosed in another, is an inner sea.
     No check for islands in inner seas added"""
-    segments = get_boundary_segments(mesh)
+
     coo_to_idx = {
             tuple(coo): idx
             for idx, coo in enumerate(mesh.vert2['coord'])
     }
-    sorted_segments = [s[1] for s in sorted([(segment.length, segment) for segment in segments], reverse=True)]
+    segments = get_boundary_segments(mesh)
+    segments = [s[1] for s in sorted([(segment.length, segment) for segment in segments], reverse=True)]
     codes = np.ones((len(segments))) * -1
 
     for n in range(len(segments)):
-        segment = sorted_segments[n]
+        segment = segments[n]
         enclosed_segments = []
 
-        # segment was found to be enclosed in another
-        if codes[n] > -1:
-            continue
-
         # land / island is arbitrary in global case as everything is an island. Everything with a shoreline of more
-        # then 500 degrees (~5500Km) is land
-        if segment.length > 500:
-            codes[n] = 0
-        else:
+        # then 500 degrees (~5500Km) is land. Initialy, everything is an island
+        if codes[n] == -1:
             codes[n] = 1
 
         if not segment.is_simple:
             for side in ['left', 'right']:
                 poly = unwrap_linestring_to_valid_polygon(segment, side)[0]
-                enclosed_segments.extend(_find_enclosed_segments(poly, segments[n+1::]))
+                enclosed_segments.extend(_find_enclosed_segments(poly, segments, n))
         else:
             poly = polygonize(LineString(list(segment.coords)))[0]
-            enclosed_segments.extend(_find_enclosed_segments(poly, segments[n + 1::]))
+            enclosed_segments.extend(_find_enclosed_segments(poly, segments, n))
 
         # enclosed is an inner sea, so land boundary
-        codes[enclosed_segments] = 0
+        if codes[n] == 1:
+            codes[enclosed_segments] = 0
+        else:
+            codes[enclosed_segments] = 1
+
+        # if the lenght is large, set to land
+        if segment.length > 350:
+            codes[n] = 0
 
     boundaries = {0: {}, 1: {}, None: {}}
     for code in [0, 1]:
         bnd_id = 0
         for n in range(len(segments)):
             if codes[n] == code:
-                segm_coo = sorted_segments[n].coords
+                segm_coo = segments[n].coords
                 indices = [coo_to_idx[segm_coo[e]] for e, coo in enumerate(segm_coo)]
                 ids = [e + 1 for e in indices]
                 boundaries[code][bnd_id] = {
@@ -255,15 +257,15 @@ def get_boundary_data(mesh):
                     # ???? ids and indices switched?
                     "index_id": indices,
                     "indexes": ids,
-                    'geometry': sorted_segments[n],
+                    'geometry': segments[n],
                 }
                 bnd_id += 1
 
     return boundaries
 
-def _find_enclosed_segments(outer, segments):
+def _find_enclosed_segments(outer, segments, outer_index):
     enclosed_segments = []
-    for n in range(len(segments)):
+    for n in range(outer_index + 1, len(segments)):
         segment = segments[n]
         if not segment.is_simple:
             for side in ['left', 'right']:
