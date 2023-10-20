@@ -324,6 +324,8 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         assert 1 in boundary_data
         assert 2 in boundary_data
 
+        assert boundary_data[0][0]['geometry'].coords.xy[0][0] == self.mesh.coord[boundary_data[0][0]['indexes'][0], 0]
+
     def test_rewrite_mesh_with_boundaries(self):
         boundary_data = utils.get_boundary_data(self.mesh.msh_t)
         new_mesh = Mesh(self.mesh.msh_t, boundaries=boundary_data)

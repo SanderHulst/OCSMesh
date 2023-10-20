@@ -208,8 +208,11 @@ def get_boundary_segments(mesh, boundary_vertices=None):
 def get_boundary_data(mesh):
     """Assume that the largest polygon is land. Any poly enclosed in another, is an inner sea.
     No check for islands in inner seas added"""
-    vertices = get_boundary_vertices(mesh)
-    segments = get_boundary_segments(mesh, boundary_vertices=vertices)
+    segments = get_boundary_segments(mesh)
+    coo_to_idx = {
+            tuple(coo): idx
+            for idx, coo in enumerate(mesh.vert2['coord'])
+    }
     sorted_segments = [s[1] for s in sorted([(segment.length, segment) for segment in segments], reverse=True)]
     codes = np.ones((len(segments))) * -1
 
@@ -244,10 +247,13 @@ def get_boundary_data(mesh):
         bnd_id = 0
         for n in range(len(segments)):
             if codes[n] == code:
+                segm_coo = segments[n].coords
+                indices = [coo_to_idx[segm_coo[e]] for e, coo in enumerate(segm_coo[:-1])]
+                ids = [e + 1 for e in indices]
                 boundaries[code].append({
                     'id': bnd_id,
-                    "index_id": vertices[n],
-                    "indexes": vertices[n],
+                    "index_id": ids,
+                    "indexes": indices,
                     'geometry': segments[n],
                 })
 
