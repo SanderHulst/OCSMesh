@@ -5,6 +5,7 @@ import unittest
 import warnings
 
 import numpy as np
+from pyproj import CRS
 import shapely
 
 from ocsmesh import utils
@@ -307,6 +308,7 @@ class BoundaryExtraction(unittest.TestCase):
 class TestGlobalBoundarySetter(unittest.TestCase):
     mesh_file = os.path.join(os.path.dirname(__file__), '../data/f14/global_50859e27330n1.14')
     mesh = Mesh.open(mesh_file)
+    mesh.msh_t.crs = CRS('EPSG:4326')
 
     def test_get_boundary_vertices(self):
         segments = utils.get_boundary_vertices(self.mesh.msh_t)
@@ -316,11 +318,22 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         segments = utils.get_boundary_segments(self.mesh.msh_t)
         assert len(segments) == 65
 
+    def test_get_global_boundary_data(self):
+        boundary_data = utils.get_boundary_data(self.mesh.msh_t)
+        assert 0 in boundary_data
+        assert 1 in boundary_data
+        assert 2 in boundary_data
 
-    def test_unwrap_line_to_valid_polygon(self):
+    def test_rewrite_mesh_with_boundaries(self):
+        boundary_data = utils.get_boundary_data(self.mesh.msh_t)
+        new_mesh = Mesh(self.mesh.msh_t, boundaries=boundary_data)
+        new_mesh.write('new_fort.14')
+
+    def test_unwrap_linestring_to_valid_polygon(self):
         segments = utils.get_boundary_segments(self.mesh.msh_t)
 
         # In this example global mesh, the first segment is wrapped around 180W/180E.
         for side in [None, 'left', 'right']:
-            poly = utils.unwrap_line_to_valid_polygon(segments[0], side=side)
+            poly = utils.unwrap_linestring_to_valid_polygon(segments[0], side=side)
             assert poly
+

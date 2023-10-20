@@ -184,7 +184,7 @@ def get_boundary_vertices(mesh):
             # for other issues like folded elements
             poly = list(polygonize(line))
             if not poly:
-                poly = unwrap_line_to_valid_polygon(line)
+                poly = unwrap_linestring_to_valid_polygon(line)
 
             if not poly:
                 raise ValueError(
@@ -194,38 +194,80 @@ def get_boundary_vertices(mesh):
     return vertices
 
 
-def unwrap_line_to_valid_polygon(line, side=None):
-    if side is None:
-        side = 'left'
-    coords = list(line.coords)
-    for n in range(len(coords)):
-        n2 = n + 1
-        if n2 == len(coords):
-            n2 = 0
-        pnt1 = coords[n]
-        pnt2 = coords[n2]
-        dx = pnt2[0] - pnt1[0]
-        if dx > 350.:
-            if side == 'left':
-                coords[n2] = (pnt2[0] - 360., pnt2[1])
-            else:
-                coords[n] = (pnt1[0] + 360., pnt1[1])
-        elif dx < -350.:
-            if side == 'left':
-                coords[n] = (pnt1[0] - 360., pnt1[1])
-            else:
-                coords[n2] = (pnt2[0] + 360., pnt2[1])
-    return list(polygonize(LineString(coords)))
-
-
-def get_boundary_segments(mesh):
+def get_boundary_segments(mesh, boundary_vertices=None):
     coords = mesh.vert2['coord']
-    boundary_vertices = get_boundary_vertices(mesh)
+    if boundary_vertices is None:
+        boundary_vertices = get_boundary_vertices(mesh)
     segments = []
     for segment_vertices in boundary_vertices:
         segment = linemerge(coords[segment_vertices, :].tolist())
         segments.append(segment)
     return segments
+
+
+def get_boundary_data(mesh):
+    """Assume that the largest polygon is land. Any poly enclosed in another, is an inner sea.
+    No check for islands in inner seas added"""
+    vertices = get_boundary_vertices(mesh)
+    segments = get_boundary_segments(mesh, boundary_vertices=vertices)
+    sorted_segments = [s[1] for s in sorted([(segment.length, segment) for segment in segments], reverse=True)]
+    codes = np.ones((len(segments))) * -1
+
+    for n in range(len(segments)):
+        segment = sorted_segments[n]
+        enclosed_segments = []
+
+        # segment was found to be enclosed in another
+        if codes[n] > -1:
+            continue
+
+        # land / island is arbitrary in global case as everything is an island. Everything with a shoreline of more
+        # then 500 degrees (~5500Km) is land
+        if segment.length > 500:
+            codes[n] = 0
+        else:
+            codes[n] = 1
+
+        if not segment.is_simple:
+            for side in ['left', 'right']:
+                poly = unwrap_linestring_to_valid_polygon(segment, side)[0]
+                enclosed_segments.extend(_find_enclosed_segments(poly, segments[n+1::]))
+        else:
+            poly = polygonize(LineString(list(segment.coords)))[0]
+            enclosed_segments.extend(_find_enclosed_segments(poly, segments[n + 1::]))
+
+        # enclosed is an inner sea, so land boundary
+        codes[enclosed_segments] = 0
+
+    boundaries = {0: [], 1: [], 2: []}
+    for code in [0, 1]:
+        bnd_id = 0
+        for n in range(len(segments)):
+            if codes[n] == code:
+                boundaries[code].append({
+                    'id': bnd_id,
+                    "index_id": vertices[n],
+                    "indexes": vertices[n],
+                    'geometry': segments[n],
+                })
+
+    return boundaries
+
+def _find_enclosed_segments(outer, segments):
+    enclosed_segments = []
+    for n in range(len(segments)):
+        segment = segments[n]
+        if not segment.is_simple:
+            for side in ['left', 'right']:
+                poly = unwrap_linestring_to_valid_polygon(segment, side)[0]
+                if outer.contains(poly):
+                    enclosed_segments.append(n)
+                    break
+        else:
+            poly = polygonize(LineString(list(segment.coords)))[0]
+            if outer.contains(poly):
+                enclosed_segments.append(n)
+    return enclosed_segments
 
 
 def get_mesh_polygons(mesh):
@@ -309,6 +351,30 @@ def get_mesh_polygons(mesh):
 
 
     return MultiPolygon(result_polys)
+
+
+def unwrap_linestring_to_valid_polygon(line, side=None):
+    if side is None:
+        side = 'left'
+    coords = list(line.coords)
+    for n in range(len(coords)):
+        n2 = n + 1
+        if n2 == len(coords):
+            n2 = 0
+        pnt1 = coords[n]
+        pnt2 = coords[n2]
+        dx = pnt2[0] - pnt1[0]
+        if dx > 350.:
+            if side == 'left':
+                coords[n2] = (pnt2[0] - 360., pnt2[1])
+            else:
+                coords[n] = (pnt1[0] + 360., pnt1[1])
+        elif dx < -350.:
+            if side == 'left':
+                coords[n] = (pnt1[0] - 360., pnt1[1])
+            else:
+                coords[n2] = (pnt2[0] + 360., pnt2[1])
+    return list(polygonize(LineString(coords)))
 
 
 def repartition_features(linestring, max_verts):
