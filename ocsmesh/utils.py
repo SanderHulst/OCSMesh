@@ -242,20 +242,22 @@ def get_boundary_data(mesh):
         # enclosed is an inner sea, so land boundary
         codes[enclosed_segments] = 0
 
-    boundaries = {0: [], 1: [], 2: []}
+    boundaries = {0: {}, 1: {}, None: {}}
     for code in [0, 1]:
         bnd_id = 0
         for n in range(len(segments)):
             if codes[n] == code:
-                segm_coo = segments[n].coords
-                indices = [coo_to_idx[segm_coo[e]] for e, coo in enumerate(segm_coo[:-1])]
+                segm_coo = sorted_segments[n].coords
+                indices = [coo_to_idx[segm_coo[e]] for e, coo in enumerate(segm_coo)]
                 ids = [e + 1 for e in indices]
-                boundaries[code].append({
+                boundaries[code][bnd_id] = {
                     'id': bnd_id,
-                    "index_id": ids,
-                    "indexes": indices,
-                    'geometry': segments[n],
-                })
+                    # ???? ids and indices switched?
+                    "index_id": indices,
+                    "indexes": ids,
+                    'geometry': sorted_segments[n],
+                }
+                bnd_id += 1
 
     return boundaries
 

@@ -9,7 +9,7 @@ from pyproj import CRS
 import shapely
 
 from ocsmesh import utils
-from ocsmesh.mesh.mesh import Mesh
+from ocsmesh.mesh.mesh import Mesh, Boundaries
 
 
 
@@ -322,14 +322,22 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         boundary_data = utils.get_boundary_data(self.mesh.msh_t)
         assert 0 in boundary_data
         assert 1 in boundary_data
-        assert 2 in boundary_data
 
-        assert boundary_data[0][0]['geometry'].coords.xy[0][0] == self.mesh.coord[boundary_data[0][0]['indexes'][0], 0]
+        # None is used as a key for open boundaries
+        assert None in boundary_data
+
+        assert boundary_data[0][30]['geometry'].coords.xy[0][0] == self.mesh.vert2[boundary_data[0][30]['index_id'][0]][0][0]
+        # must be closed
+        assert boundary_data[0][0]['indexes'][0] == boundary_data[0][0]['indexes'][-1]
 
     def test_rewrite_mesh_with_boundaries(self):
         boundary_data = utils.get_boundary_data(self.mesh.msh_t)
+
         new_mesh = Mesh(self.mesh.msh_t, boundaries=boundary_data)
-        new_mesh.write('new_fort.14')
+        boundaries = Boundaries(new_mesh, boundary_data)
+        new_mesh._boundaries = boundaries
+        # new_mesh.boundaries = boundaries
+        new_mesh.write('new_fort.14', overwrite=True)
 
     def test_unwrap_linestring_to_valid_polygon(self):
         segments = utils.get_boundary_segments(self.mesh.msh_t)
