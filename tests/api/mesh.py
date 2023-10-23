@@ -3,18 +3,20 @@ import os
 import tempfile
 import unittest
 import warnings
+import shutil
+from pathlib import Path
 
 import numpy as np
+
 from pyproj import CRS
-import shapely
+from shapely import geometry
 
 from ocsmesh import utils
-from ocsmesh.mesh.mesh import Mesh, Boundaries
-
+from ocsmesh.mesh.mesh import Mesh, Raster, Boundaries
 
 
 def edge_at (x, y):
-    return shapely.geometry.Point(x, y).buffer(0.05)
+    return geometry.Point(x, y).buffer(0.05)
 
 class BoundaryExtraction(unittest.TestCase):
 
@@ -53,6 +55,18 @@ class BoundaryExtraction(unittest.TestCase):
 
             self.mesh = Mesh(mesh_msht)
 
+    def _chkEqualPermutations(self, a, b):
+        # Make sure there are rings!
+        assert a[0] == a[-1] and b[0] == b[-1]
+
+        a = np.array(a[:-1])
+        b = np.array(b[:-1])
+        idx = np.nonzero(a == b[0])
+        if len(idx) == 0:
+            raise ValueError("One item in arg2 is not found in arg1")
+        shift = -idx[0].item()
+        self.assertTrue(np.all(np.roll(a, shift=shift) == np.array(b)))
+
     def test_auto_boundary_fails_if_na_elev(self):
         # Set one node to nan value
         self.mesh.msh_t.value[-1] = np.nan
@@ -79,7 +93,7 @@ class BoundaryExtraction(unittest.TestCase):
             bdry.land().iloc[0]['index_id'],
             [5, 4, 3, 2, 1, 6, 11, 16, 21, 26, 27, 28, 29, 30]
         )
-        self.assertEqual(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
+        self._chkEqualPermutations(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
 
 
     def test_auto_boundary_2open_correctness(self):
@@ -100,13 +114,13 @@ class BoundaryExtraction(unittest.TestCase):
         self.assertEqual(bdry.open().iloc[1]['index_id'], [30, 25, 20, 15, 10, 5])
         self.assertEqual(bdry.land().iloc[0]['index_id'], [5, 4, 3, 2, 1])
         self.assertEqual(bdry.land().iloc[1]['index_id'], [26, 27, 28, 29, 30])
-        self.assertEqual(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
+        self._chkEqualPermutations(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
 
 
     def test_manual_boundary_specification_correctness(self):
         # Shape for wrapping bottom boundary
-        shape1 = shapely.geometry.box(0.5, -0.5, 3.5, 0.5)
-        shape2 = shapely.geometry.box(1.5, -0.5, 2.5, 0.5)
+        shape1 = geometry.box(0.5, -0.5, 3.5, 0.5)
+        shape2 = geometry.box(1.5, -0.5, 2.5, 0.5)
 
         self.mesh.boundaries.auto_generate()
         # bdry is referring to mesh object and can be mutated
@@ -127,7 +141,7 @@ class BoundaryExtraction(unittest.TestCase):
             [1, 6, 11, 16, 21, 26, 27, 28, 29, 30, 25, 20, 15, 10, 5]
         )
         self.assertEqual(bdry.land().iloc[1]['index_id'], [2, 3, 4])
-        self.assertEqual(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
+        self._chkEqualPermutations(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
 
 
     def test_manual_boundary_notaffect_interior(self):
@@ -135,7 +149,7 @@ class BoundaryExtraction(unittest.TestCase):
         # bdry is referring to mesh object and can be mutated
         bdry = self.mesh.boundaries
 
-        bdry.set_open(region=shapely.geometry.box(0.5, 1.5, 2.5, 3.5))
+        bdry.set_open(region=geometry.box(0.5, 1.5, 2.5, 3.5))
 
         self.assertEqual(len(bdry.open()), 0)
         self.assertEqual(len(bdry.land()), 1)
@@ -147,7 +161,7 @@ class BoundaryExtraction(unittest.TestCase):
         # bdry is referring to mesh object and can be mutated
         bdry = self.mesh.boundaries
 
-        bdry.set_open(region=shapely.geometry.Polygon([
+        bdry.set_open(region=geometry.Polygon([
             (-1, 4.5),
             (0.5, 4.5),
             (0.5, 3.5),
@@ -288,7 +302,7 @@ class BoundaryExtraction(unittest.TestCase):
         bdry.find_islands()
 
         self.assertEqual(len(bdry.interior()), 1)
-        self.assertEqual(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
+        self._chkEqualPermutations(bdry.interior().iloc[0]['index_id'], [12, 13, 18, 17, 12])
 
 
     def test_specify_boundary_on_mesh_with_no_boundary(self):
@@ -303,6 +317,7 @@ class BoundaryExtraction(unittest.TestCase):
         self.assertEqual(len(bdry.interior()), 0)
 
         self.assertEqual(bdry.open().iloc[0]['index_id'], [1, 2, 3])
+
 
 
 class TestGlobalBoundarySetter(unittest.TestCase):
@@ -326,7 +341,7 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         assert 0 in boundary_data
         assert 1 in boundary_data
 
-        assert boundary_data[0][30]['geometry'].coords.xy[0][0] == self.mesh.vert2[boundary_data[0][30]['index_id'][0]][0][0]
+        assert boundary_data[0][3]['geometry'].coords.xy[0][0] == self.mesh.vert2[boundary_data[0][3]['index_id'][0]][0][0]
         # must be closed
         assert boundary_data[0][0]['indexes'][0] == boundary_data[0][0]['indexes'][-1]
 
@@ -345,3 +360,67 @@ class TestGlobalBoundarySetter(unittest.TestCase):
             poly = utils.unwrap_linestring_to_valid_polygon(segments[0], side=side)
             assert poly
 
+
+class RasterInterpolation(unittest.TestCase):
+
+    def setUp(self):
+        self.tdir = Path(tempfile.mkdtemp())
+
+        msht1 = utils.create_rectangle_mesh(
+            nx=13, ny=5, x_extent=(-73.9, -71.1), y_extent=(40.55, 40.85),
+            holes=[],
+        )
+        msht1.crs = CRS.from_user_input(4326)
+        msht2 = utils.create_rectangle_mesh(
+            nx=11, ny=7, x_extent=(-73.9, -71.1), y_extent=(40.55, 40.85),
+            holes=[],
+        )
+        msht2.crs = CRS.from_user_input(4326)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore', category=UserWarning,
+                message='Input mesh has no CRS information'
+            )
+            self.mesh1 = Mesh(msht1)
+            self.mesh2 = Mesh(msht2)
+
+        self.rast = self.tdir / 'rast.tif'
+
+        rast_xy = np.mgrid[-74:-71:0.1, 40.9:40.5:-0.01]
+        rast_z = np.ones((rast_xy.shape[1], rast_xy.shape[2], 2))
+        rast_z[:, :, 1] = 2
+        utils.raster_from_numpy(
+            self.rast, rast_z, rast_xy, 4326
+        )
+
+
+    def tearDown(self):
+        shutil.rmtree(self.tdir)
+
+
+    def test_interpolation_io(self):
+        rast = Raster(self.rast)
+
+        self.mesh1.interpolate(rast)
+        self.assertTrue(np.isclose(self.mesh1.value, 1).all())
+
+        # TODO: Improve the assertion!
+        with self.assertRaises(Exception):
+            self.mesh1.interpolate(self.mesh2)
+
+
+    def test_interpolation_band(self):
+        rast = Raster(self.rast)
+
+        self.mesh1.interpolate(rast)
+        self.assertTrue(np.isclose(self.mesh1.value, 1).all())
+
+        self.mesh1.interpolate(rast, band=2)
+        self.assertTrue(np.isclose(self.mesh1.value, 2).all())
+
+
+    # TODO Add more interpolation tests
+
+
+if __name__ == '__main__':
+    unittest.main()
