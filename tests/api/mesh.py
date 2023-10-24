@@ -1,5 +1,6 @@
 #! python
 import os
+import pickle
 import tempfile
 import unittest
 import warnings
@@ -341,6 +342,7 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         assert 0 in boundary_data
         assert 1 in boundary_data
 
+        assert len(boundary_data[0]) == 7
         assert boundary_data[0][3]['geometry'].coords.xy[0][0] == self.mesh.vert2[boundary_data[0][3]['index_id'][0]][0][0]
         # must be closed
         assert boundary_data[0][0]['indexes'][0] == boundary_data[0][0]['indexes'][-1]
@@ -359,6 +361,15 @@ class TestGlobalBoundarySetter(unittest.TestCase):
         for side in [None, 'left', 'right']:
             poly = utils.unwrap_linestring_to_valid_polygon(segments[0], side=side)
             assert poly
+
+    def test_unwrap_high_res_antartic(self):
+        pfile = os.path.join(os.path.dirname(__file__), '../data/f14/antartica_global2M.pkl')
+        with open(pfile, 'rb') as fh:
+            coords = pickle.load(fh)
+        assert coords
+        segment = geometry.LineString(list(coords))
+        poly = utils.unwrap_linestring_to_valid_polygon(segment)
+        assert poly
 
 
 class RasterInterpolation(unittest.TestCase):

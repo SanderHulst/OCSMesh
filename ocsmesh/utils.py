@@ -282,6 +282,20 @@ def _find_enclosed_segments(outer, segments, outer_index):
     return enclosed_segments
 
 
+def wrap_artic_around_minimum_latitude(segment):
+    coords = list(segment.coords)
+    lats = np.array([x[1] for x in coords])
+    if np.all(lats < -60):
+        lons = np.array([x[0] for x in coords])
+        # also wrap the last coordinate as the line is closed
+        ind = np.arange(-2, lats.argmin(), dtype=int)
+        lons[ind] += 360
+        for n in ind:
+            coords[n] = (lons[n], lats[n])
+        segment = LineString(coords)
+    return segment
+    
+
 def get_mesh_polygons(mesh):
     elm_polys = []
     for elm_type in ELEM_2D_TYPES:
@@ -300,7 +314,13 @@ def get_mesh_polygons(mesh):
 def unwrap_linestring_to_valid_polygon(line, side=None):
     if side is None:
         side = 'left'
+    line = wrap_artic_around_minimum_latitude(line)
     coords = list(line.coords)
+
+    # check whether artic wrap helped
+    poly = list(polygonize(LineString(coords)))
+    if poly:
+        return poly
     for n in range(len(coords)):
         n2 = n + 1
         if n2 == len(coords):
