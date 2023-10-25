@@ -1,5 +1,6 @@
 from collections import defaultdict
 from itertools import permutations
+import pickle
 from typing import Union, Dict, Sequence, Tuple, List
 from functools import reduce
 from multiprocessing import cpu_count, Pool
@@ -151,46 +152,166 @@ def geom_to_multipolygon(mesh):
     return MultiPolygon(polygon_collection)
 
 
-def get_boundary_segments(mesh):
-
+def get_boundary_vertices(mesh):
     coords = mesh.vert2['coord']
     boundary_edges = get_boundary_edges(mesh)
     boundary_verts = np.unique(boundary_edges)
     boundary_coords = coords[boundary_verts]
 
     vert_map = {
-            orig: new for new, orig in enumerate(boundary_verts)}
+        orig: new for new, orig in enumerate(boundary_verts)}
     new_boundary_edges = np.array(
         [vert_map[v] for v in boundary_edges.ravel()]).reshape(
-                boundary_edges.shape)
+        boundary_edges.shape)
 
     graph = sparse.lil_matrix(
-            (len(boundary_verts), len(boundary_verts)))
+        (len(boundary_verts), len(boundary_verts)))
     for vert1, vert2 in new_boundary_edges:
         graph[vert1, vert2] = 1
 
     n_components, labels = sparse.csgraph.connected_components(
-            graph, directed=False)
+        graph, directed=False)
 
-    segments = []
+    vertices = []
     for i in range(n_components):
         conn_mask = np.any(np.isin(
-                new_boundary_edges, np.nonzero(labels == i)),
-                axis=1)
+            new_boundary_edges, np.nonzero(labels == i)),
+            axis=1)
         conn_edges = new_boundary_edges[conn_mask]
-        this_segment = linemerge(boundary_coords[conn_edges].tolist())
-        if not this_segment.is_simple:
+        line = linemerge(boundary_coords[conn_edges].tolist())
+        bverts = boundary_verts[conn_edges].tolist()
+
+        if not line.is_simple:
             # Pinched nodes also result in non-simple linestring,
             # but they can be handled gracefully, here we are looking
             # for other issues like folded elements
-            test_polys = list(polygonize(this_segment))
-            if not test_polys:
+            poly = list(polygonize(line))
+            if not poly:
+                # The antartic can intersect itself because the most southern point is not a beginning or start.
+                line = wrap_artic_around_minimum_latitude(line)
+                poly = polygonize(line)
+            if not poly:
+                poly = unwrap_linestring_to_valid_polygon(line)
+
+            if not poly:
                 raise ValueError(
                     "Mesh boundary crosses itself! Folded element(s)!")
-        segments.append(this_segment)
+        vertices.append(bverts)
 
+    return vertices
+
+
+def get_boundary_segments(mesh, boundary_vertices=None):
+    coords = mesh.vert2['coord']
+    if boundary_vertices is None:
+        boundary_vertices = get_boundary_vertices(mesh)
+    segments = []
+    for segment_vertices in boundary_vertices:
+        segment = linemerge(coords[segment_vertices, :].tolist())
+        segments.append(segment)
     return segments
 
+
+def get_boundary_data(mesh):
+    """Assume that the largest polygon is land. Any poly enclosed in another, is an inner sea.
+    No check for islands in inner seas added"""
+
+    coo_to_idx = {
+            tuple(coo): idx
+            for idx, coo in enumerate(mesh.vert2['coord'])
+    }
+    segments = get_boundary_segments(mesh)
+    segments = [s[1] for s in sorted([(segment.length, segment) for segment in segments], reverse=True)]
+    codes = np.ones((len(segments))) * -1
+
+    for n in range(len(segments)):
+        segment = segments[n]
+        enclosed_segments = []
+
+        # land / island is arbitrary in global case as everything is an island. Everything with a shoreline of more
+        # then 500 degrees (~5500Km) is land. Initialy, everything is an island
+        if codes[n] == -1:
+            codes[n] = 1
+
+        if not segment.is_simple:
+            # The antartic can intersect itself because the most southern point is not a beginning or start.
+            segment = wrap_artic_around_minimum_latitude(segment)
+            poly = list(polygonize(segment))
+            if not poly:
+                # no antartic problem, so a line might cross the left or right meridian. Spool until a valid
+                # polygon is found
+                for side in ['left', 'right']:
+                    poly = unwrap_linestring_to_valid_polygon(segment, side)
+                    if poly:
+                        enclosed_segments.extend(_find_enclosed_segments(poly[0], segments, n))
+            else:
+                enclosed_segments.extend(_find_enclosed_segments(poly[0], segments, n))
+        else:
+            # just a valid polygon
+            poly = polygonize(LineString(list(segment.coords)))[0]
+            enclosed_segments.extend(_find_enclosed_segments(poly, segments, n))
+
+        # enclosed is an inner sea, so land boundary
+        if codes[n] == 1:
+            codes[enclosed_segments] = 0
+        else:
+            codes[enclosed_segments] = 1
+
+        # if the lenght is large, set to land
+        if segment.length > 350:
+            codes[n] = 0
+
+    boundaries = {0: {}, 1: {}, None: {}}
+    for code in [0, 1]:
+        bnd_id = 0
+        for n in range(len(segments)):
+            if codes[n] == code:
+                segm_coo = segments[n].coords
+                indices = [coo_to_idx[segm_coo[e]] for e, coo in enumerate(segm_coo)]
+                ids = [e + 1 for e in indices]
+                boundaries[code][bnd_id] = {
+                    'id': bnd_id,
+                    # ???? ids and indices switched?
+                    "index_id": indices,
+                    "indexes": ids,
+                    'geometry': segments[n],
+                }
+                bnd_id += 1
+
+    return boundaries
+
+def _find_enclosed_segments(outer, segments, outer_index):
+    enclosed_segments = []
+    for n in range(outer_index + 1, len(segments)):
+        segment = segments[n]
+        if not segment.is_simple:
+            for side in ['left', 'right']:
+                poly = unwrap_linestring_to_valid_polygon(segment, side)
+                if not poly:
+                    continue
+                if outer.contains(poly[0]):
+                    enclosed_segments.append(n)
+                    break
+        else:
+            poly = polygonize(LineString(list(segment.coords)))[0]
+            if outer.contains(poly):
+                enclosed_segments.append(n)
+    return enclosed_segments
+
+
+def wrap_artic_around_minimum_latitude(segment):
+    coords = list(segment.coords)
+    lats = np.array([x[1] for x in coords])
+    if np.all(lats < -60):
+        lons = np.array([x[0] for x in coords])
+        # also wrap the last coordinate as the line is closed
+        ind = np.arange(-1, lats.argmin(), dtype=int)
+        lons[ind] += 360
+        for n in ind:
+            coords[n] = (lons[n], lats[n])
+        segment = LineString(coords)
+    return segment
+    
 
 def get_mesh_polygons(mesh):
     elm_polys = []
@@ -205,6 +326,36 @@ def get_mesh_polygons(mesh):
         poly = MultiPolygon([poly])
 
     return poly
+
+
+def unwrap_linestring_to_valid_polygon(line, side=None):
+    if side is None:
+        side = 'left'
+    line = wrap_artic_around_minimum_latitude(line)
+    coords = list(line.coords)
+
+    # check whether artic wrap helped
+    poly = list(polygonize(LineString(coords)))
+    if poly:
+        return poly
+    for n in range(len(coords)):
+        n2 = n + 1
+        if n2 == len(coords):
+            n2 = 0
+        pnt1 = coords[n]
+        pnt2 = coords[n2]
+        dx = pnt2[0] - pnt1[0]
+        if dx > 350.:
+            if side == 'left':
+                coords[n2] = (pnt2[0] - 360., pnt2[1])
+            else:
+                coords[n] = (pnt1[0] + 360., pnt1[1])
+        elif dx < -350.:
+            if side == 'left':
+                coords[n] = (pnt1[0] - 360., pnt1[1])
+            else:
+                coords[n2] = (pnt2[0] + 360., pnt2[1])
+    return list(polygonize(LineString(coords)))
 
 
 def repartition_features(linestring, max_verts):

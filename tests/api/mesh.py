@@ -1,4 +1,6 @@
 #! python
+import os
+import pickle
 import tempfile
 import unittest
 import warnings
@@ -6,13 +8,13 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from jigsawpy import jigsaw_msh_t
+
 from pyproj import CRS
 from shapely import geometry
+from shapely.ops import polygonize
 
 from ocsmesh import utils
-from ocsmesh.mesh.mesh import Mesh, Raster
-
+from ocsmesh.mesh.mesh import Mesh, Raster, Boundaries
 
 
 def edge_at (x, y):
@@ -317,6 +319,58 @@ class BoundaryExtraction(unittest.TestCase):
         self.assertEqual(len(bdry.interior()), 0)
 
         self.assertEqual(bdry.open().iloc[0]['index_id'], [1, 2, 3])
+
+
+
+class TestGlobalBoundarySetter(unittest.TestCase):
+    mesh_file = os.path.join(os.path.dirname(__file__), '../data/f14/global_50859e27330n1.14')
+    mesh = Mesh.open(mesh_file)
+    mesh.msh_t.crs = CRS('EPSG:4326')
+
+    def test_get_boundary_vertices(self):
+        segments = utils.get_boundary_vertices(self.mesh.msh_t)
+        assert len(segments)  == 65
+
+    def test_get_boundary_segments(self):
+        segments = utils.get_boundary_segments(self.mesh.msh_t)
+        assert len(segments) == 65
+
+    def test_get_global_boundary_data(self):
+        boundary_data = utils.get_boundary_data(self.mesh.msh_t)
+
+        # None is used as a key for open boundaries
+        assert None in boundary_data
+        assert 0 in boundary_data
+        assert 1 in boundary_data
+
+        assert len(boundary_data[0]) == 7
+        assert boundary_data[0][3]['geometry'].coords.xy[0][0] == self.mesh.vert2[boundary_data[0][3]['index_id'][0]][0][0]
+        # must be closed
+        assert boundary_data[0][0]['indexes'][0] == boundary_data[0][0]['indexes'][-1]
+
+    def test_rewrite_mesh_with_boundaries(self):
+        boundary_data = utils.get_boundary_data(self.mesh.msh_t)
+        boundaries = Boundaries(self.mesh, boundary_data)
+        new_mesh = Mesh(self.mesh.msh_t, boundaries=boundaries)
+
+        new_mesh.write('new_fort.14', overwrite=True)
+
+    def test_unwrap_linestring_to_valid_polygon(self):
+        segments = utils.get_boundary_segments(self.mesh.msh_t)
+
+        # In this example global mesh, the first segment is wrapped around 180W/180E.
+        for side in [None, 'left', 'right']:
+            poly = utils.unwrap_linestring_to_valid_polygon(segments[0], side=side)
+            assert poly
+
+    def test_unwrap_high_res_antartic(self):
+        pfile = os.path.join(os.path.dirname(__file__), '../data/f14/antartica_global2M.pkl')
+        with open(pfile, 'rb') as fh:
+            segment = pickle.load(fh)
+        assert not segment.is_simple
+        segment = utils.wrap_artic_around_minimum_latitude(segment)
+        assert polygonize(segment)
+        assert segment.is_simple
 
 
 class RasterInterpolation(unittest.TestCase):
