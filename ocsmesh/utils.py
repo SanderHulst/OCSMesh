@@ -1,5 +1,6 @@
 from collections import defaultdict
 from itertools import permutations
+import pickle
 from typing import Union, Dict, Sequence, Tuple, List
 from functools import reduce
 from multiprocessing import cpu_count, Pool
@@ -186,6 +187,10 @@ def get_boundary_vertices(mesh):
             # for other issues like folded elements
             poly = list(polygonize(line))
             if not poly:
+                # The antartic can intersect itself because the most southern point is not a beginning or start.
+                line = wrap_artic_around_minimum_latitude(line)
+                poly = polygonize(line)
+            if not poly:
                 poly = unwrap_linestring_to_valid_polygon(line)
 
             if not poly:
@@ -229,10 +234,20 @@ def get_boundary_data(mesh):
             codes[n] = 1
 
         if not segment.is_simple:
-            for side in ['left', 'right']:
-                poly = unwrap_linestring_to_valid_polygon(segment, side)[0]
-                enclosed_segments.extend(_find_enclosed_segments(poly, segments, n))
+            # The antartic can intersect itself because the most southern point is not a beginning or start.
+            segment = wrap_artic_around_minimum_latitude(segment)
+            poly = list(polygonize(segment))
+            if not poly:
+                # no antartic problem, so a line might cross the left or right meridian. Spool until a valid
+                # polygon is found
+                for side in ['left', 'right']:
+                    poly = unwrap_linestring_to_valid_polygon(segment, side)
+                    if poly:
+                        enclosed_segments.extend(_find_enclosed_segments(poly[0], segments, n))
+            else:
+                enclosed_segments.extend(_find_enclosed_segments(poly[0], segments, n))
         else:
+            # just a valid polygon
             poly = polygonize(LineString(list(segment.coords)))[0]
             enclosed_segments.extend(_find_enclosed_segments(poly, segments, n))
 
@@ -271,8 +286,10 @@ def _find_enclosed_segments(outer, segments, outer_index):
         segment = segments[n]
         if not segment.is_simple:
             for side in ['left', 'right']:
-                poly = unwrap_linestring_to_valid_polygon(segment, side)[0]
-                if outer.contains(poly):
+                poly = unwrap_linestring_to_valid_polygon(segment, side)
+                if not poly:
+                    continue
+                if outer.contains(poly[0]):
                     enclosed_segments.append(n)
                     break
         else:
@@ -288,7 +305,7 @@ def wrap_artic_around_minimum_latitude(segment):
     if np.all(lats < -60):
         lons = np.array([x[0] for x in coords])
         # also wrap the last coordinate as the line is closed
-        ind = np.arange(-2, lats.argmin(), dtype=int)
+        ind = np.arange(-1, lats.argmin(), dtype=int)
         lons[ind] += 360
         for n in ind:
             coords[n] = (lons[n], lats[n])

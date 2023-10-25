@@ -11,6 +11,7 @@ import numpy as np
 
 from pyproj import CRS
 from shapely import geometry
+from shapely.ops import polygonize
 
 from ocsmesh import utils
 from ocsmesh.mesh.mesh import Mesh, Raster, Boundaries
@@ -365,11 +366,11 @@ class TestGlobalBoundarySetter(unittest.TestCase):
     def test_unwrap_high_res_antartic(self):
         pfile = os.path.join(os.path.dirname(__file__), '../data/f14/antartica_global2M.pkl')
         with open(pfile, 'rb') as fh:
-            coords = pickle.load(fh)
-        assert coords
-        segment = geometry.LineString(list(coords))
-        poly = utils.unwrap_linestring_to_valid_polygon(segment)
-        assert poly
+            segment = pickle.load(fh)
+        assert not segment.is_simple
+        segment = utils.wrap_artic_around_minimum_latitude(segment)
+        assert polygonize(segment)
+        assert segment.is_simple
 
 
 class RasterInterpolation(unittest.TestCase):
