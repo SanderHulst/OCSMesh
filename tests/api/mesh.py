@@ -321,15 +321,14 @@ class BoundaryExtraction(unittest.TestCase):
         self.assertEqual(bdry.open().iloc[0]['index_id'], [1, 2, 3])
 
 
-
 class TestGlobalBoundarySetter(unittest.TestCase):
     mesh_file = os.path.join(os.path.dirname(__file__), '../data/f14/global_50859e27330n1.14')
     mesh = Mesh.open(mesh_file)
     mesh.msh_t.crs = CRS('EPSG:4326')
 
     def test_get_boundary_vertices(self):
-        segments = utils.get_boundary_vertices(self.mesh.msh_t)
-        assert len(segments)  == 65
+        vertices = utils.get_boundary_vertices(self.mesh.msh_t)
+        assert len(vertices) == 65
 
     def test_get_boundary_segments(self):
         segments = utils.get_boundary_segments(self.mesh.msh_t)
